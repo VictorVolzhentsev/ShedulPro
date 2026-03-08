@@ -1,0 +1,22 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# System
+CBS.log
+*.log
+
+# Project exclude paths
+/.venv/
