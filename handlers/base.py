@@ -62,7 +62,7 @@ async def show_main_menu(message: types.Message, lang, user_id):
 async def send_welcome(message: types.Message, state: FSMContext):
     await state.clear()
     if not await db.user_exists(message.from_user.id):
-        await db.add_user(message.from_user.id)
+        await db.ensure_user(message.from_user.id)
         await message.answer("Привет! Я бот расписания УрФУ.\nHello! I am UrFU schedule bot.\n\nПожалуйста, выберите язык / Please select language:", reply_markup=keyboards.get_language_keyboard())
     else:
         user_data = await db.get_user_settings(message.from_user.id)
@@ -103,10 +103,13 @@ async def send_help(message: types.Message, state: FSMContext):
 @router.message(F.text.in_({"🌐 Изменить язык", "🌐 Change Language"}), StateFilter('*'))
 async def change_language_menu(message: types.Message, state: FSMContext):
     await state.clear()
+    await db.ensure_user(message.from_user.id)
     await message.answer("Выберите язык / Select language:", reply_markup=keyboards.get_language_keyboard())
 
 @router.message(F.text.in_({"🔔 Включить уведомления", "🔕 Выключить уведомления", "🔔 Enable Notifications", "🔕 Disable Notifications"}), StateFilter('*'))
 async def toggle_notifications(message: types.Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    await db.ensure_user(message.from_user.id)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']
     group_id = user_data['group_id']
@@ -124,6 +127,7 @@ async def toggle_notifications(message: types.Message, state: FSMContext, bot: B
     if new_status:
         text = "Уведомления включены! Вы будете получать напоминания за 10 минут до начала пар." if lang == "ru" else "Notifications enabled! You will be reminded 10 minutes before classes."
         # Schedule notifications for today immediately
+        notifications.cancel_user_notifications(message.from_user.id)
         await notifications.schedule_for_user(bot, message.from_user.id, group_id, lang, db=db)
     else:
         text = "Уведомления выключены." if lang == "ru" else "Notifications disabled."
@@ -137,7 +141,7 @@ async def toggle_notifications(message: types.Message, state: FSMContext, bot: B
 async def process_language_selection(callback_query: types.CallbackQuery):
     lang = callback_query.data.split('_')[1]
     if not await db.user_exists(callback_query.from_user.id):
-        await db.add_user(callback_query.from_user.id)
+        await db.ensure_user(callback_query.from_user.id)
     await db.update_language(callback_query.from_user.id, lang)
     await callback_query.answer()
     if callback_query.message:

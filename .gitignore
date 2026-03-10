@@ -17,6 +17,3 @@ __pycache__/
 # System
 CBS.log
 *.log
-
-# Project exclude paths
-/.venv/

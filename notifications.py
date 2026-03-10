@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import logging
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
@@ -16,13 +17,38 @@ YEKT = datetime.timezone(datetime.timedelta(hours=5))
 scheduler = AsyncIOScheduler(timezone=YEKT)
 
 
-async def send_lesson_notification(bot: Bot, user_id: int, lesson: dict, lang: str, db: Database = None):
+def _build_notification_job_id(user_id: int, lesson: dict) -> str:
+    signature = "|".join(
+        [
+            str(lesson.get("date", "")),
+            str(lesson.get("timeBegin", "")),
+            str(lesson.get("timeEnd", "")),
+            str(lesson.get("title", "")),
+            str(lesson.get("auditoryTitle", "")),
+            str(lesson.get("teacherName", "")),
+        ]
+    )
+    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+    return f"notif_{user_id}_{digest}"
+
+
+async def send_lesson_notification(
+    bot: Bot,
+    user_id: int,
+    lesson: dict,
+    lang: str,
+    db: Database = None,
+    expected_generation: int | None = None
+):
     """Sends a notification about a specific lesson, checking subscription status first."""
     try:
         # B3: Check if user still has notifications enabled before sending (skip if db is None, e.g. for test_notif)
         if db is not None:
             user_data = await db.get_user_settings(user_id)
             if not user_data or not user_data['notifications_enabled']:
+                return
+            current_generation = int(user_data['notification_generation'] or 0)
+            if expected_generation is not None and current_generation != expected_generation:
                 return
 
         title = lesson.get('title', '')
@@ -104,12 +130,21 @@ async def send_lesson_notification(bot: Bot, user_id: int, lesson: dict, lang: s
         await bot.send_message(user_id, text, parse_mode="HTML", disable_web_page_preview=True)
     except (TelegramForbiddenError, TelegramBadRequest) as e:
         logging.info(f"User {user_id} blocked or chat inaccessible ({e}), disabling notifications.")
-        await db.set_notification_status(user_id, False)
+        if db is not None:
+            await db.set_notification_status(user_id, False)
     except Exception as e:
         logging.error(f"Failed to send notification to {user_id}: {e}")
 
 
-async def schedule_for_user(bot: Bot, user_id: int, group_id: int, lang: str, db: Database = None, schedule_data: dict = None):
+async def schedule_for_user(
+    bot: Bot,
+    user_id: int,
+    group_id: int,
+    lang: str,
+    db: Database = None,
+    schedule_data: dict = None,
+    notification_generation: int | None = None
+):
     """Schedules notifications for a single user for today.
     
     Args:
@@ -124,6 +159,12 @@ async def schedule_for_user(bot: Bot, user_id: int, group_id: int, lang: str, db
 
     if not schedule_data or 'events' not in schedule_data:
         return
+
+    if db is not None and notification_generation is None:
+        user_data = await db.get_user_settings(user_id)
+        if not user_data or not user_data['notifications_enabled']:
+            return
+        notification_generation = int(user_data['notification_generation'] or 0)
 
     # B7: Use timezone-aware datetime
     now = datetime.datetime.now(YEKT)
@@ -143,12 +184,12 @@ async def schedule_for_user(bot: Bot, user_id: int, group_id: int, lang: str, db
 
             if notification_time > now:
                 # Pass db to check subscription status before sending
-                args = [bot, user_id, event, lang, db] if db else [bot, user_id, event, lang, None]
+                args = [bot, user_id, event, lang, db, notification_generation] if db else [bot, user_id, event, lang, None, None]
                 scheduler.add_job(
                     send_lesson_notification,
                     trigger=DateTrigger(run_date=notification_time),
                     args=args,
-                    id=f"notif_{user_id}_{today_str}_{time_hm}",
+                    id=_build_notification_job_id(user_id, event),
                     replace_existing=True
                 )
                 logging.info(f"Scheduled notification for user {user_id} at {notification_time}")
@@ -182,13 +223,23 @@ async def update_daily_schedule(bot: Bot, db: Database):
         user_id = user['user_id']
         group_id = user['group_id']
         lang = user['language']
+        notification_generation = int(user['notification_generation'] or 0)
 
         # Fetch schedule once per group
         if group_id not in groups_cache:
             today_str = utils.get_yekt_date().strftime("%Y-%m-%d")
             groups_cache[group_id] = await urfu_api.get_schedule(group_id, today_str, today_str)
 
-        await schedule_for_user(bot, user_id, group_id, lang, db=db, schedule_data=groups_cache[group_id])
+        cancel_user_notifications(user_id)
+        await schedule_for_user(
+            bot,
+            user_id,
+            group_id,
+            lang,
+            db=db,
+            schedule_data=groups_cache[group_id],
+            notification_generation=notification_generation
+        )
         count += 1
 
     logging.info(f"Daily schedule update finished. Processed {count} users, {len(groups_cache)} unique groups.")
@@ -196,13 +247,18 @@ async def update_daily_schedule(bot: Bot, db: Database):
 
 def start_scheduler(bot: Bot, db: Database):
     """Starts the notification scheduler."""
+    if scheduler.running:
+        return
+
     # Daily job: update schedules at 01:00 Yekaterinburg time
     scheduler.add_job(
         update_daily_schedule,
         'cron',
         hour=1,
         minute=0,
-        args=[bot, db]
+        args=[bot, db],
+        id="daily_schedule_update",
+        replace_existing=True
     )
 
     # Also run immediately on bot startup (after 5 seconds)
@@ -210,7 +266,14 @@ def start_scheduler(bot: Bot, db: Database):
         update_daily_schedule,
         'date',
         run_date=datetime.datetime.now(YEKT) + datetime.timedelta(seconds=5),
-        args=[bot, db]
+        args=[bot, db],
+        id="startup_schedule_update",
+        replace_existing=True
     )
 
     scheduler.start()
+
+
+def stop_scheduler():
+    if scheduler.running:
+        scheduler.shutdown(wait=False)

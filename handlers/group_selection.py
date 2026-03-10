@@ -15,6 +15,7 @@ class Form(StatesGroup):
 @router.message(F.text.in_({"🎓 Выбрать группу", "🎓 Select Group"}), StateFilter('*'))
 async def select_group_start(message: types.Message, state: FSMContext):
     await state.clear()
+    await db.ensure_user(message.from_user.id)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']
     text = "Введите название группы (или часть) для поиска:" if lang == "ru" else "Enter group name (or part) to search:"
@@ -23,6 +24,14 @@ async def select_group_start(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter(Form.waiting_for_group_search))
 async def process_group_search(message: types.Message, state: FSMContext):
+    await db.ensure_user(message.from_user.id)
+    if not message.text:
+        user_data = await db.get_user_settings(message.from_user.id)
+        lang = user_data['language']
+        text = "Введите текст для поиска группы." if lang == "ru" else "Please enter text to search for a group."
+        await message.answer(text)
+        return
+
     groups = await urfu_api.search_group(message.text)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']

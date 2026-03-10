@@ -37,6 +37,7 @@ MONTHS_EN = {
 @router.message(F.text.in_({"📆 Выбрать дату", "📆 Select Date"}), StateFilter('*'))
 async def select_date_menu(message: types.Message, state: FSMContext):
     await state.clear()
+    await db.ensure_user(message.from_user.id)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']
     text = "Выберите период:" if lang == "ru" else "Select period:"
@@ -45,6 +46,7 @@ async def select_date_menu(message: types.Message, state: FSMContext):
 @router.message(F.text.in_({"📌 Показать расписание", "📌 Show Schedule"}), StateFilter('*'))
 async def show_schedule(message: types.Message, state: FSMContext):
     await state.clear()
+    await db.ensure_user(message.from_user.id)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']
     group_id = user_data['group_id']
@@ -199,6 +201,7 @@ async def show_schedule(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == 'date_custom')
 async def process_custom_date_start(callback_query: types.CallbackQuery, state: FSMContext, bot):
+    await db.ensure_user(callback_query.from_user.id)
     user_data = await db.get_user_settings(callback_query.from_user.id)
     lang = user_data['language']
     text = "Введите диапазон дат в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ\nНапример: 20.01.2026 - 24.01.2026" if lang == "ru" else "Enter date range in format DD.MM.YYYY - DD.MM.YYYY\nExample: 20.01.2026 - 24.01.2026"
@@ -208,8 +211,14 @@ async def process_custom_date_start(callback_query: types.CallbackQuery, state: 
 
 @router.message(StateFilter(Form.waiting_for_date_range))
 async def process_custom_date_input(message: types.Message, state: FSMContext):
+    await db.ensure_user(message.from_user.id)
     user_data = await db.get_user_settings(message.from_user.id)
     lang = user_data['language']
+    if not message.text:
+        error_text = "Введите диапазон дат текстом." if lang == "ru" else "Please enter the date range as text."
+        await message.answer(error_text)
+        return
+
     text_input = message.text.strip()
 
     pattern = r"(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s*[-–]\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})"
@@ -242,6 +251,7 @@ async def process_date_selection(callback_query: types.CallbackQuery, bot):
     mode = callback_query.data.split('_')[1]
     if mode == 'custom':
         return
+    await db.ensure_user(callback_query.from_user.id)
     await db.update_date_mode(callback_query.from_user.id, mode)
     user_data = await db.get_user_settings(callback_query.from_user.id)
     lang = user_data['language']

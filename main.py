@@ -12,6 +12,10 @@ import notifications
 from handlers import base_router, schedule_router, group_selection_router
 
 # Logging setup
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # Bot and dispatcher initialization
@@ -40,9 +44,12 @@ async def on_startup(dispatcher: Dispatcher):
     # Initialize connection to DB
     await db.connect()
     logging.info("Database connected")
+    notifications.start_scheduler(bot, db)
+    logging.info("Notification scheduler started")
 
 
 async def on_shutdown(bot: Bot):
+    notifications.stop_scheduler()
     await urfu_api.close_session()
     await db.close()
     logging.info("Bot session closed")
@@ -51,10 +58,7 @@ async def on_shutdown(bot: Bot):
 async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-    
-    # Start notification scheduler
-    notifications.start_scheduler(bot, db)
-    
+
     await dp.start_polling(bot)
 
 
